@@ -134,23 +134,50 @@ def get_time_words_attention_alpha(prompts, num_steps,
     alpha_time_words = alpha_time_words.reshape(num_steps + 1, len(prompts) - 1, 1, 1, max_num_words)
     return alpha_time_words
 
-def txt_draw(text,
-                target_size=[512,512]):
-    plt.figure(dpi=300,figsize=(1,1))
-    plt.text(-0.1, 1.1, text,fontsize=3.5, wrap=True,verticalalignment="top",horizontalalignment="left")
-    plt.axis('off')
+# def txt_draw(text,
+#                 target_size=[512,512]):
+#     plt.figure(dpi=300,figsize=(1,1))
+#     plt.text(-0.1, 1.1, text,fontsize=3.5, wrap=True,verticalalignment="top",horizontalalignment="left")
+#     plt.axis('off')
     
-    canvas = FigureCanvasAgg(plt.gcf())
-    canvas.draw()
-    w, h = canvas.get_width_height()
-    buf = np.fromstring(canvas.tostring_argb(), dtype=np.uint8)
-    buf.shape = (w, h, 4)
-    buf = np.roll(buf, 3, axis=2)
-    image = Image.frombytes("RGBA", (w, h), buf.tostring())
-    from PIL import Image
-    image = image.resize(target_size, Image.Resampling.LANCZOS)
-    image = np.asarray(image)[:,:,:3]
+#     canvas = FigureCanvasAgg(plt.gcf())
+#     canvas.draw()
+#     w, h = canvas.get_width_height()
+#     buf = np.fromstring(canvas.tostring_argb(), dtype=np.uint8)
+#     buf.shape = (w, h, 4)
+#     buf = np.roll(buf, 3, axis=2)
+#     image = Image.frombytes("RGBA", (w, h), buf.tostring())
+#     from PIL import Image
+#     image = image.resize(target_size, Image.Resampling.LANCZOS)
+#     image = np.asarray(image)[:,:,:3]
     
-    plt.close('all')
+#     plt.close('all')
     
-    return image
+#     return image
+def txt_draw(text, font_size=24, target_size=(512, 512)):
+    """
+    Draw multi-line text onto a white image, used for instruction visualization.
+    This version is compatible with Pillow>=10.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    # 创建白底图
+    img = Image.new("RGB", target_size, (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+
+    # 尝试加载一个常见字体，不行就用默认字体
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", font_size)
+    except Exception:
+        font = ImageFont.load_default()
+
+    margin = 10
+    line_height = font_size + 4
+    y = margin
+    for line in str(text).split("\\n"):
+        draw.text((margin, y), line, fill=(0, 0, 0), font=font)
+        y += line_height
+        if y > target_size[1] - line_height:
+            break  # 超出就不画了，防止越界
+
+    return img
