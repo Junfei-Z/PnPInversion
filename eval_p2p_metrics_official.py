@@ -96,13 +96,6 @@ def main():
     parser.add_argument('--metrics_csv', type=str,
                         default="metrics_official_ddim_p2p.csv",
                         help="输出 csv 路径")
-    parser.add_argument(
-    "--edit_category_list",
-    type=int,
-    nargs="+",
-    default=[0,1,2,3,4,5,6,7,8,9],
-    help="editing_type_id to evaluate",
-)
 
     args = parser.parse_args()
 
