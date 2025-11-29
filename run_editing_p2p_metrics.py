@@ -217,19 +217,37 @@ if __name__ == "__main__":
                     print(f"[Warning] missing source or edited image for {image_path}, skip metrics.")
                     continue
 
-                src_img = Image.open(image_path).convert("RGB").resize(
-                    edited_image.size, Image.BILINEAR
-                )
-
-                # --- SSIM: 归一化到 [0,1] ---
-                src_np = np.array(src_img).astype(np.float32) / 255.0
-                edited_np = np.array(edited_image).astype(np.float32) / 255.0
-                ssim_val = ssim(
-                    src_np,
-                    edited_np,
-                    channel_axis=-1,
-                    data_range=1.0,
-                )
+                #--- SSIM 背景区域的相似度
+                # 先读原图和 edited 单图
+                src_img = Image.open(image_path).convert("RGB")          # 原图
+                edited_img = edited_image.convert("RGB")                 # 刚刚保存/读出来的单图
+                
+                # 为保险起见，对齐尺寸（通常两张都是 512x512，这里多一步不影响）
+                edited_img = edited_img.resize(src_img.size, Image.BILINEAR)
+                
+                # 转成 numpy，保持 0~255 范围
+                src_np = np.array(src_img).astype(np.float32)
+                edited_np = np.array(edited_img).astype(np.float32)
+                
+                # === 利用 PIE-Bench 的 mask，只在“背景区域”算 SSIM ===
+                # mask_decode 返回的 mask: 编辑区域=1，背景=0
+                mask_array = mask_decode(item["mask"])                             # H x W, 0/1
+                mask_3ch = mask_array[:, :, np.newaxis].repeat(3, axis=2)          # H x W x 3
+                background_mask = 1.0 - mask_3ch                                   # 背景=1, 前景=0
+                
+                if background_mask.sum() > 0:
+                    src_bg = src_np * background_mask
+                    edited_bg = edited_np * background_mask
+                
+                    ssim_val = ssim(
+                        src_bg,
+                        edited_bg,
+                        channel_axis=-1,
+                        data_range=255.0,   # 因为现在像素在 0~255
+                    )
+                else:
+                    # 极端情况：mask 全 1，没有背景，就给个默认值
+                    ssim_val = 1.0
 
                 # --- LPIPS: 输入 [-1,1] ---
                 src_t = to_tensor(src_img).unsqueeze(0).to(device) * 2 - 1
