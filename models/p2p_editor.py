@@ -193,8 +193,20 @@ class P2PEditor:
                                        uncond_embeddings=uncond_embeddings)
 
         images = latent2image(model=self.ldm_stable.vae, latents=latents)
+        # ---- 关键改动：拆成 panel 和 edited 两张 ----
+        edited_np = images[-1]                   # 最右边那张
+        edited_image = Image.fromarray(edited_np)
 
-        return Image.fromarray(np.concatenate((image_instruct, image_gt, reconstruct_image,images[-1]),axis=1))
+        panel_np = np.concatenate(
+            (image_instruct, image_gt, reconstruct_image, edited_np),
+            axis=1
+        )
+        panel_image = Image.fromarray(panel_np)
+
+        # 返回一个 tuple，而不是单个 Image
+        return panel_image, edited_image
+
+        # return Image.fromarray(np.concatenate((image_instruct, image_gt, reconstruct_image,images[-1]),axis=1))
 
     def edit_image_null_text_inversion(
         self,
