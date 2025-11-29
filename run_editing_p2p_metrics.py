@@ -45,6 +45,7 @@ def setup_seed(seed=1234):
     torch.backends.cudnn.benchmark = False
 
 
+# 原有“方法名 → 子目录名”的映射保持不变（用于拼接图）
 image_save_paths = {
     "ddim+p2p": "ddim+p2p",
     "null-text-inversion+p2p": "null-text-inversion+p2p",
@@ -135,7 +136,7 @@ if __name__ == "__main__":
         original_prompt = item["original_prompt"].replace("[", "").replace("]", "")
         editing_prompt = item["editing_prompt"].replace("[", "").replace("]", "")
 
-        # 源图像路径（source image）
+        # 源图像（source image）
         image_path = os.path.join(f"{data_path}/annotation_images", item["image_path"])
 
         editing_instruction_text = item["editing_instruction"]
@@ -145,13 +146,28 @@ if __name__ == "__main__":
         ).convert("L")
 
         for edit_method in edit_method_list:
-            present_image_save_path = image_path.replace(
-                data_path,
-                os.path.join(output_path, image_save_paths[edit_method])
+            # 相对路径：annotation_images/0_random_140/000000000000.jpg
+            rel_path = os.path.relpath(image_path, data_path)
+
+            # ① 拼接图路径（保留原有结构，用来看效果）
+            collage_save_path = os.path.join(
+                output_path,
+                image_save_paths[edit_method],
+                rel_path
             )
 
-            # 1) 生成 / 读取 edited image
-            if ((not os.path.exists(present_image_save_path)) or rerun_exist_images):
+            # ② 单独 edited 图路径（新建 *_single 目录，只用于算指标）
+            single_save_root = image_save_paths[edit_method] + "_single"
+            single_save_path = os.path.join(
+                output_path,
+                single_save_root,
+                rel_path
+            )
+
+            # 1) 生成 / 读取 “单独 edited 图”（single_save_path）
+            need_run = (not os.path.exists(single_save_path)) or rerun_exist_images
+
+            if need_run:
                 print(f"editing image [{image_path}] with [{edit_method}]")
                 setup_seed()
                 torch.cuda.empty_cache()
@@ -177,30 +193,42 @@ if __name__ == "__main__":
                     recon_t=400,
                 )
 
-                if not os.path.exists(os.path.dirname(present_image_save_path)):
-                    os.makedirs(os.path.dirname(present_image_save_path))
-                edited_image.save(present_image_save_path)
+                # --- 保存单图：single_save_path ---
+                os.makedirs(os.path.dirname(single_save_path), exist_ok=True)
+                edited_image.save(single_save_path)
+
+                # --- 额外：生成一个简单的拼接图（source | edited），保存到 collage_save_path ---
+                try:
+                    src_img_for_collage = Image.open(image_path).convert("RGB").resize(
+                        edited_image.size, Image.BILINEAR
+                    )
+                    w, h = edited_image.size
+                    collage = Image.new("RGB", (2 * w, h))
+                    collage.paste(src_img_for_collage, (0, 0))
+                    collage.paste(edited_image, (w, 0))
+
+                    os.makedirs(os.path.dirname(collage_save_path), exist_ok=True)
+                    collage.save(collage_save_path)
+                except Exception as e:
+                    print(f"[Warning] failed to create collage for {image_path}: {e}")
 
                 print("finish")
             else:
-                print(f"skip image [{image_path}] with [{edit_method}]")
+                print(f"skip image [{image_path}] with [{edit_method}] (single edited image already exists)")
                 if args.compute_metrics:
-                    edited_image = Image.open(present_image_save_path).convert("RGB")
+                    edited_image = Image.open(single_save_path).convert("RGB")
 
-            # 2) 计算指标：
-            #    SSIM(source_image, edited_image)
-            #    LPIPS(source_image, edited_image)
-            #    CLIP(editing_prompt, edited_image)
+            # 2) 计算指标：SSIM/LPIPS/CLIP（全部基于 single_save_path）
             if args.compute_metrics:
-                if not os.path.exists(image_path):
-                    print(f"[Warning] source image not found: {image_path}, skip metrics.")
+                if (not os.path.exists(image_path)) or (not os.path.exists(single_save_path)):
+                    print(f"[Warning] missing source or edited image for {image_path}, skip metrics.")
                     continue
 
                 src_img = Image.open(image_path).convert("RGB").resize(
                     edited_image.size, Image.BILINEAR
                 )
 
-                # --- SSIM: 先归一化到 [0,1]，data_range=1.0，更稳定 ---
+                # --- SSIM: 归一化到 [0,1] ---
                 src_np = np.array(src_img).astype(np.float32) / 255.0
                 edited_np = np.array(edited_image).astype(np.float32) / 255.0
                 ssim_val = ssim(
@@ -210,12 +238,12 @@ if __name__ == "__main__":
                     data_range=1.0,
                 )
 
-                # --- LPIPS: 按库要求，输入 [-1,1] ---
+                # --- LPIPS: 输入 [-1,1] ---
                 src_t = to_tensor(src_img).unsqueeze(0).to(device) * 2 - 1
                 edit_t = to_tensor(edited_image).unsqueeze(0).to(device) * 2 - 1
                 lpips_val = lpips_fn(src_t, edit_t).item()
 
-                # --- CLIP: target prompt (editing_prompt) vs edited image ---
+                # --- CLIP: target prompt (editing_prompt) vs edited image (single) ---
                 with torch.no_grad():
                     clip_img = clip_preprocess(edited_image).unsqueeze(0).to(device)
                     img_feat = clip_model.encode_image(clip_img)
@@ -225,7 +253,6 @@ if __name__ == "__main__":
                     text_feat = clip_model.encode_text(text_tokens)
                     text_feat = text_feat / text_feat.norm(dim=-1, keepdim=True)
 
-                    # 余弦相似度 = 归一化后的内积
                     clip_sim = (img_feat @ text_feat.T).item()
 
                 metrics_records.append({
@@ -233,7 +260,8 @@ if __name__ == "__main__":
                     "edit_method": edit_method,
                     "editing_type_id": item["editing_type_id"],
                     "image_path": image_path,
-                    "edited_image_path": present_image_save_path,
+                    # 注意：这里写的是 single_save_path，而不是拼接图
+                    "edited_image_path": single_save_path,
                     "original_prompt": original_prompt,
                     "editing_prompt": editing_prompt,
                     "SSIM_src_edited": ssim_val,
@@ -262,7 +290,6 @@ if __name__ == "__main__":
             for row in metrics_records:
                 writer.writerow(row)
 
-        # 打印整体均值，方便和 benchmark 对齐
         all_ssim = [r["SSIM_src_edited"] for r in metrics_records]
         all_lpips = [r["LPIPS_src_edited"] for r in metrics_records]
         all_clip = [r["CLIP_tgtPrompt_editedImage"] for r in metrics_records]
