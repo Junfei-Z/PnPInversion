@@ -45,7 +45,7 @@ def setup_seed(seed=1234):
     torch.backends.cudnn.benchmark = False
 
 
-# 原有“方法名 → 子目录名”的映射保持不变（用于拼接图）
+# 原有“方法名 → 子目录名”的映射（用于 panel 图）
 image_save_paths = {
     "ddim+p2p": "ddim+p2p",
     "null-text-inversion+p2p": "null-text-inversion+p2p",
@@ -91,15 +91,17 @@ image_save_paths = {
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--rerun_exist_images', action="store_true")  # rerun existing images
-    parser.add_argument('--data_path', type=str, default="data")      # PIE-Bench 根目录
-    parser.add_argument('--output_path', type=str, default="output")
+    parser.add_argument('--rerun_exist_images', action="store_true",
+                        help="If set, re-generate images even if they already exist.")
+    parser.add_argument('--data_path', type=str, default="data",
+                        help="Root path of PIE-Bench (contains annotation_images/, mapping_file.json, etc.)")
+    parser.add_argument('--output_path', type=str, default="output",
+                        help="Root path to save outputs.")
     parser.add_argument('--edit_category_list', nargs='+', type=str,
                         default=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"])
     parser.add_argument('--edit_method_list', nargs='+', type=str,
-                        default=["ddim+p2p"])  # 只跑 ddim+p2p
+                        default=["ddim+p2p"])
 
-    # 是否计算指标 & 输出文件名
     parser.add_argument('--compute_metrics', action="store_true",
                         help="If set, compute SSIM/LPIPS/CLIP and save to csv.")
     parser.add_argument('--metrics_csv', type=str,
@@ -125,7 +127,8 @@ if __name__ == "__main__":
         to_tensor = transforms.ToTensor()
         metrics_records = []
 
-    with open(f"{data_path}/mapping_file.json", "r") as f:
+    # 读 mapping_file
+    with open(os.path.join(data_path, "mapping_file.json"), "r") as f:
         editing_instruction = json.load(f)
 
     for key, item in editing_instruction.items():
@@ -137,7 +140,7 @@ if __name__ == "__main__":
         editing_prompt = item["editing_prompt"].replace("[", "").replace("]", "")
 
         # 源图像（source image）
-        image_path = os.path.join(f"{data_path}/annotation_images", item["image_path"])
+        image_path = os.path.join(data_path, "annotation_images", item["image_path"])
 
         editing_instruction_text = item["editing_instruction"]
         blended_word = item["blended_word"].split(" ") if item["blended_word"] != "" else []
@@ -149,22 +152,22 @@ if __name__ == "__main__":
             # 相对路径：annotation_images/0_random_140/000000000000.jpg
             rel_path = os.path.relpath(image_path, data_path)
 
-            # ① 拼接图路径（保留原有结构，用来看效果）
-            collage_save_path = os.path.join(
+            # ① panel：4 图拼接 (text | src | recon | edited)
+            panel_save_path = os.path.join(
                 output_path,
                 image_save_paths[edit_method],
                 rel_path
             )
 
-            # ② 单独 edited 图路径（新建 *_single 目录，只用于算指标）
-            single_save_root = image_save_paths[edit_method] + "_single"
+            # ② 单独 edited 图：*_only 目录，用于算指标
+            single_save_root = image_save_paths[edit_method] + "_only"
             single_save_path = os.path.join(
                 output_path,
                 single_save_root,
                 rel_path
             )
 
-            # 1) 生成 / 读取 “单独 edited 图”（single_save_path）
+            # 是否需要重新生成
             need_run = (not os.path.exists(single_save_path)) or rerun_exist_images
 
             if need_run:
@@ -172,7 +175,8 @@ if __name__ == "__main__":
                 setup_seed()
                 torch.cuda.empty_cache()
 
-                edited_image = p2p_editor(
+                # 注意：P2PEditor 现在返回 (panel_image, edited_image)
+                panel_image, edited_image = p2p_editor(
                     edit_method,
                     image_path=image_path,
                     prompt_src=original_prompt,
@@ -193,24 +197,13 @@ if __name__ == "__main__":
                     recon_t=400,
                 )
 
-                # --- 保存单图：single_save_path ---
+                # 保存 panel
+                os.makedirs(os.path.dirname(panel_save_path), exist_ok=True)
+                panel_image.save(panel_save_path)
+
+                # 保存单独 edited 图（真正算指标的）
                 os.makedirs(os.path.dirname(single_save_path), exist_ok=True)
                 edited_image.save(single_save_path)
-
-                # --- 额外：生成一个简单的拼接图（source | edited），保存到 collage_save_path ---
-                try:
-                    src_img_for_collage = Image.open(image_path).convert("RGB").resize(
-                        edited_image.size, Image.BILINEAR
-                    )
-                    w, h = edited_image.size
-                    collage = Image.new("RGB", (2 * w, h))
-                    collage.paste(src_img_for_collage, (0, 0))
-                    collage.paste(edited_image, (w, 0))
-
-                    os.makedirs(os.path.dirname(collage_save_path), exist_ok=True)
-                    collage.save(collage_save_path)
-                except Exception as e:
-                    print(f"[Warning] failed to create collage for {image_path}: {e}")
 
                 print("finish")
             else:
@@ -218,7 +211,7 @@ if __name__ == "__main__":
                 if args.compute_metrics:
                     edited_image = Image.open(single_save_path).convert("RGB")
 
-            # 2) 计算指标：SSIM/LPIPS/CLIP（全部基于 single_save_path）
+            # 2) 计算指标：SSIM/LPIPS/CLIP（全部基于 single_save_path 里的 edited_image）
             if args.compute_metrics:
                 if (not os.path.exists(image_path)) or (not os.path.exists(single_save_path)):
                     print(f"[Warning] missing source or edited image for {image_path}, skip metrics.")
@@ -260,7 +253,7 @@ if __name__ == "__main__":
                     "edit_method": edit_method,
                     "editing_type_id": item["editing_type_id"],
                     "image_path": image_path,
-                    # 注意：这里写的是 single_save_path，而不是拼接图
+                    # 注意：这里写的是 *_only 里的路径
                     "edited_image_path": single_save_path,
                     "original_prompt": original_prompt,
                     "editing_prompt": editing_prompt,
