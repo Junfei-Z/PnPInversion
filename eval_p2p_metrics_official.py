@@ -151,7 +151,7 @@ def main():
                 continue
 
             rel_path = os.path.relpath(src_path, args.data_path)  # annotation_images/...
-            single_root = IMAGE_SAVE_PATHS[edit_method] + "_single"
+            single_root = IMAGE_SAVE_PATHS[edit_method]
             edited_path = os.path.join(args.output_path, single_root, rel_path)
 
             if not os.path.exists(edited_path):
