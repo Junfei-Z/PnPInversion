@@ -135,7 +135,7 @@ if __name__ == "__main__":
         original_prompt = item["original_prompt"].replace("[", "").replace("]", "")
         editing_prompt = item["editing_prompt"].replace("[", "").replace("]", "")
 
-        # 源图像路径
+        # 源图像路径（source image）
         image_path = os.path.join(f"{data_path}/annotation_images", item["image_path"])
 
         editing_instruction_text = item["editing_instruction"]
@@ -187,7 +187,10 @@ if __name__ == "__main__":
                 if args.compute_metrics:
                     edited_image = Image.open(present_image_save_path).convert("RGB")
 
-            # 2) 计算指标：SSIM(src, edited), LPIPS(src, edited), CLIP(target prompt vs edited image)
+            # 2) 计算指标：
+            #    SSIM(source_image, edited_image)
+            #    LPIPS(source_image, edited_image)
+            #    CLIP(editing_prompt, edited_image)
             if args.compute_metrics:
                 if not os.path.exists(image_path):
                     print(f"[Warning] source image not found: {image_path}, skip metrics.")
@@ -197,17 +200,17 @@ if __name__ == "__main__":
                     edited_image.size, Image.BILINEAR
                 )
 
-                # --- SSIM ---
-                src_np = np.array(src_img)
-                edited_np = np.array(edited_image)
+                # --- SSIM: 先归一化到 [0,1]，data_range=1.0，更稳定 ---
+                src_np = np.array(src_img).astype(np.float32) / 255.0
+                edited_np = np.array(edited_image).astype(np.float32) / 255.0
                 ssim_val = ssim(
                     src_np,
                     edited_np,
                     channel_axis=-1,
-                    data_range=255
+                    data_range=1.0,
                 )
 
-                # --- LPIPS ---
+                # --- LPIPS: 按库要求，输入 [-1,1] ---
                 src_t = to_tensor(src_img).unsqueeze(0).to(device) * 2 - 1
                 edit_t = to_tensor(edited_image).unsqueeze(0).to(device) * 2 - 1
                 lpips_val = lpips_fn(src_t, edit_t).item()
@@ -222,6 +225,7 @@ if __name__ == "__main__":
                     text_feat = clip_model.encode_text(text_tokens)
                     text_feat = text_feat / text_feat.norm(dim=-1, keepdim=True)
 
+                    # 余弦相似度 = 归一化后的内积
                     clip_sim = (img_feat @ text_feat.T).item()
 
                 metrics_records.append({
@@ -237,7 +241,7 @@ if __name__ == "__main__":
                     "CLIP_tgtPrompt_editedImage": clip_sim
                 })
 
-    # 3) 写出 csv
+    # 3) 写出 csv + 打印整体均值
     if args.compute_metrics and len(metrics_records) > 0:
         csv_path = args.metrics_csv
         fieldnames = [
@@ -257,4 +261,14 @@ if __name__ == "__main__":
             writer.writeheader()
             for row in metrics_records:
                 writer.writerow(row)
+
+        # 打印整体均值，方便和 benchmark 对齐
+        all_ssim = [r["SSIM_src_edited"] for r in metrics_records]
+        all_lpips = [r["LPIPS_src_edited"] for r in metrics_records]
+        all_clip = [r["CLIP_tgtPrompt_editedImage"] for r in metrics_records]
+
         print(f"\n[Done] metrics saved to {csv_path}")
+        print(f"[Summary over {len(metrics_records)} samples]")
+        print(f"  Mean SSIM(source, edited)      : {np.mean(all_ssim):.4f}")
+        print(f"  Mean LPIPS(source, edited)     : {np.mean(all_lpips):.4f}")
+        print(f"  Mean CLIP(prompt, edited_image): {np.mean(all_clip):.4f}")
