@@ -41,7 +41,7 @@ def mask_decode(encoded_mask, image_shape=(512, 512)):
 
 # 和之前一样的 “方法名 → 子目录名” 映射
 IMAGE_SAVE_PATHS = {
-    "ddim+p2p": "ddim+p2p",
+    "ddim+p2p": "ddim+p2p_only",
     "null-text-inversion+p2p": "null-text-inversion+p2p",
     "null-text-inversion+p2p_a800": "null-text-inversion+p2p_a800",
     "null-text-inversion+p2p_3090": "null-text-inversion+p2p_3090",
