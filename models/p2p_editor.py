@@ -26,7 +26,7 @@ class P2PEditor:
         self.ldm_stable.scheduler.set_timesteps(self.num_ddim_steps)
 
         
-    def __call__(self, 
+    def __call__(self,
                 edit_method,
                 image_path,
                 prompt_src,
@@ -43,11 +43,13 @@ class P2PEditor:
                 eq_params=None,
                 is_replace_controller=False,
                 use_inversion_guidance=False,
-                dilate_mask=1,):
+                dilate_mask=1,
+                edit_type_id=None,):
         if edit_method=="ddim+p2p":
-            return self.edit_image_ddim(image_path, prompt_src, prompt_tar, guidance_scale=guidance_scale, 
-                                        cross_replace_steps=cross_replace_steps, self_replace_steps=self_replace_steps, 
-                                        blend_word=blend_word, eq_params=eq_params, is_replace_controller=is_replace_controller)
+            return self.edit_image_ddim(image_path, prompt_src, prompt_tar, guidance_scale=guidance_scale,
+                                        cross_replace_steps=cross_replace_steps, self_replace_steps=self_replace_steps,
+                                        blend_word=blend_word, eq_params=eq_params, is_replace_controller=is_replace_controller,
+                                        edit_type_id=edit_type_id)
         elif edit_method in ["null-text-inversion+p2p", "null-text-inversion+p2p_a800", "null-text-inversion+p2p_3090"]:
             return self.edit_image_null_text_inversion(image_path, prompt_src, prompt_tar, guidance_scale=guidance_scale, 
                                         cross_replace_steps=cross_replace_steps, self_replace_steps=self_replace_steps, 
