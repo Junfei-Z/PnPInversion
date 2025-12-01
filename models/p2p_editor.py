@@ -9,7 +9,6 @@ from diffusers import StableDiffusionPipeline
 from utils.utils import load_512, latent2image, txt_draw
 from PIL import Image
 import numpy as np
-import os
 
 class P2PEditor:
     #之前的想法是调整这里的num_ddim_steps（最开始是50）
@@ -176,40 +175,24 @@ class P2PEditor:
         image_instruct = txt_draw(f"source prompt: {prompt_src}\ntarget prompt: {prompt_tar}")
 
         ########## edit ##########
-        # Choose between adaptive or fixed parameters
-        # Set environment variable USE_ADAPTIVE_CONTROL=false to use fixed parameters
-        use_adaptive = os.environ.get('USE_ADAPTIVE_CONTROL', 'true').lower() == 'true'
+        # Adaptive parameter adjustment based on semantic analysis
+        adaptive_cross, adaptive_self = get_adaptive_parameters(
+            prompt_src,
+            prompt_tar,
+            self.ldm_stable.tokenizer,
+            edit_type_id,
+            verbose=True
+        )
 
-        if use_adaptive:
-            # Adaptive parameter adjustment based on semantic analysis
-            adaptive_cross, adaptive_self = get_adaptive_parameters(
-                prompt_src,
-                prompt_tar,
-                self.ldm_stable.tokenizer,
-                edit_type_id,
-                verbose=True
-            )
-            final_cross = adaptive_cross
-            final_self = adaptive_self
-        else:
-            # Use fixed parameters (baseline)
-            final_cross = cross_replace_steps
-            final_self = self_replace_steps
-            print(f"[Fixed Parameters - Baseline]")
-            print(f"  Cross-replace steps: {final_cross:.2f}")
-            print(f"  Self-replace steps:  {final_self:.2f}")
-            if edit_type_id:
-                print(f"  Edit type: {edit_type_id}")
-
-        cross_replace_steps_dict = {
-            'default_': final_cross,
+        cross_replace_steps = {
+            'default_': adaptive_cross,
         }
 
         controller = make_controller(pipeline=self.ldm_stable,
                                     prompts=prompts,
                                     is_replace_controller=is_replace_controller,
-                                    cross_replace_steps=cross_replace_steps_dict,
-                                    self_replace_steps=final_self,
+                                    cross_replace_steps=cross_replace_steps,
+                                    self_replace_steps=adaptive_self,
                                     blend_words=blend_word,
                                     equilizer_params=eq_params,
                                     num_ddim_steps=self.num_ddim_steps,
