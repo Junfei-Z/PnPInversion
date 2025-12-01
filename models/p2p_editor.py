@@ -9,13 +9,16 @@ from diffusers import StableDiffusionPipeline
 from utils.utils import load_512, latent2image, txt_draw
 from PIL import Image
 import numpy as np
+from models.enhanced_text_encoder import load_enhanced_text_encoder, verify_encoder_compatibility, EnhancedTextEncoderConfig
 
 class P2PEditor:
     #之前的想法是调整这里的num_ddim_steps（最开始是50）
-    def __init__(self, method_list, device, num_ddim_steps=50) -> None:
+    def __init__(self, method_list, device, num_ddim_steps=50, enhanced_encoder=None) -> None:
         self.device=device
         self.method_list=method_list
         self.num_ddim_steps=num_ddim_steps
+        self.enhanced_encoder=enhanced_encoder
+
         # init model
         self.scheduler = DDIMSchedulerDev(beta_start=0.00085,
                                     beta_end=0.012,
@@ -25,6 +28,41 @@ class P2PEditor:
         self.ldm_stable = StableDiffusionPipeline.from_pretrained(
             "CompVis/stable-diffusion-v1-4", scheduler=self.scheduler).to(device)
         self.ldm_stable.scheduler.set_timesteps(self.num_ddim_steps)
+
+        # ⭐ Replace text encoder if enhanced_encoder is specified
+        if enhanced_encoder is not None:
+            print(f"\n{'='*80}")
+            print(f"🚀 Replacing text encoder with enhanced version: {enhanced_encoder}")
+            print(f"{'='*80}")
+
+            # Store original encoder for comparison
+            self.original_text_encoder = self.ldm_stable.text_encoder
+
+            # Load enhanced encoder
+            enhanced_text_encoder, enhanced_tokenizer = load_enhanced_text_encoder(
+                encoder_name=enhanced_encoder,
+                device=device
+            )
+
+            # Verify compatibility before replacing
+            print("\nVerifying compatibility with SD 1.4...")
+            is_compatible = verify_encoder_compatibility(enhanced_text_encoder)
+
+            if is_compatible:
+                # Replace text encoder
+                self.ldm_stable.text_encoder = enhanced_text_encoder
+
+                # Update tokenizer to match the new encoder
+                # Note: We keep max_length=77 for compatibility
+                self.ldm_stable.tokenizer = enhanced_tokenizer
+                self.ldm_stable.tokenizer.model_max_length = 77
+
+                print(f"\n✓✓✓ Successfully replaced text encoder with {enhanced_encoder} ✓✓✓")
+                print(f"{'='*80}\n")
+            else:
+                print(f"\n✗✗✗ Enhanced encoder is not compatible! Using original encoder. ✗✗✗")
+                print(f"{'='*80}\n")
+                self.enhanced_encoder = None  # Disable enhanced encoder
 
         
     def __call__(self,
