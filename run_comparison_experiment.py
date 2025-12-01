@@ -144,39 +144,71 @@ def run_editing_batch(editor, samples, data_path, output_dir, edit_method="ddim+
     return results
 
 
-def run_evaluation(data_path, output_path, exp_name, metrics_csv):
+def run_evaluation(results_list, exp_name, metrics_csv, device='cuda'):
     """
-    Run evaluation using eval_p2p_metrics_official.py
+    Run evaluation using simplified eval_single_image.py
 
     Args:
-        data_path: PIE-Bench data directory
-        output_path: Output directory containing edited images
+        results_list: List of result dictionaries from editing
         exp_name: Experiment name (baseline or enhanced)
         metrics_csv: Output CSV file path
+        device: Device to use
     """
     print(f"\n{'='*80}")
     print(f"Evaluating {exp_name.upper()}")
     print(f"{'='*80}")
 
-    cmd = f"""python eval_p2p_metrics_official.py \
-        --data_path {data_path} \
-        --output_path {os.path.join(output_path, exp_name)} \
-        --edit_category_list 0 \
-        --edit_method_list ddim+p2p \
-        --metrics_csv {metrics_csv}"""
+    # Import evaluation function
+    import sys
+    sys.path.insert(0, os.getcwd())
+    from eval_single_image import evaluate_single_image
 
-    print(f"Running command:\n{cmd}\n")
+    eval_results = []
 
-    import subprocess
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    for idx, result in enumerate(results_list):
+        if not result.get('success', False):
+            continue
 
-    if result.returncode == 0:
-        print(result.stdout)
-        print(f"✓ Evaluation completed: {metrics_csv}")
+        source_path = result['image_path']
+        edited_path = result['edited_path']
+        target_prompt = result['editing_prompt']
+
+        print(f"\n[{idx+1}/{len(results_list)}] {os.path.basename(edited_path)}")
+
+        try:
+            metrics = evaluate_single_image(
+                source_path=source_path,
+                edited_path=edited_path,
+                target_prompt=target_prompt,
+                device=device
+            )
+
+            eval_results.append({
+                'id': result['id'],
+                'source_path': source_path,
+                'edited_path': edited_path,
+                'prompt': target_prompt,
+                'SSIM_bg': metrics.get('ssim', 0.0),
+                'LPIPS_bg': metrics.get('lpips', 0.0),
+                'CLIP_whole': metrics.get('clip_similarity', 0.0)
+            })
+
+        except Exception as e:
+            print(f"  ✗ Evaluation failed: {e}")
+            continue
+
+    # Save to CSV
+    if eval_results:
+        import csv
+        with open(metrics_csv, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=['id', 'source_path', 'edited_path', 'prompt', 'SSIM_bg', 'LPIPS_bg', 'CLIP_whole'])
+            writer.writeheader()
+            writer.writerows(eval_results)
+
+        print(f"\n✓ Evaluation completed: {metrics_csv}")
+        print(f"  Evaluated {len(eval_results)} images")
     else:
-        print(f"✗ Evaluation failed:")
-        print(result.stderr)
-        raise RuntimeError(f"Evaluation failed for {exp_name}")
+        print(f"\n✗ No results to save")
 
     return metrics_csv
 
@@ -398,12 +430,15 @@ def main():
         # Evaluate baseline
         print("\n📊 Evaluating BASELINE...")
         baseline_csv = os.path.join(args.output_dir, "metrics_baseline.csv")
-        run_evaluation(
-            data_path=args.data_path,
-            output_path=args.output_dir,
-            exp_name="baseline",
-            metrics_csv=baseline_csv
-        )
+        if baseline_results:
+            run_evaluation(
+                results_list=baseline_results,
+                exp_name="baseline",
+                metrics_csv=baseline_csv,
+                device=device
+            )
+        else:
+            print("⚠ No baseline results to evaluate")
 
     # Run enhanced experiment
     enhanced_results = None
@@ -429,12 +464,15 @@ def main():
         # Evaluate enhanced
         print("\n📊 Evaluating ENHANCED...")
         enhanced_csv = os.path.join(args.output_dir, "metrics_enhanced.csv")
-        run_evaluation(
-            data_path=args.data_path,
-            output_path=args.output_dir,
-            exp_name="enhanced",
-            metrics_csv=enhanced_csv
-        )
+        if enhanced_results:
+            run_evaluation(
+                results_list=enhanced_results,
+                exp_name="enhanced",
+                metrics_csv=enhanced_csv,
+                device=device
+            )
+        else:
+            print("⚠ No enhanced results to evaluate")
 
     # Generate comparison report
     if not args.skip_baseline and not args.skip_enhanced:
