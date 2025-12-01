@@ -12,8 +12,7 @@ import numpy as np
 import os
 
 class P2PEditor:
-    #之前的想法是调整这里的num_ddim_steps（最开始是50）
-    def __init__(self, method_list, device, num_ddim_steps=50) -> None:
+    def __init__(self, method_list, device, num_ddim_steps=25) -> None:
         self.device=device
         self.method_list=method_list
         self.num_ddim_steps=num_ddim_steps
@@ -154,11 +153,11 @@ class P2PEditor:
     ):
         image_gt = load_512(image_path)
         prompts = [prompt_src, prompt_tar]
-#这里是调整num_inner_steps让其更接近原图最开始这里是0
+
         null_inversion = NullInversion(model=self.ldm_stable,
                                     num_ddim_steps=self.num_ddim_steps)
         _, _, x_stars, uncond_embeddings = null_inversion.invert(
-            image_gt=image_gt, prompt=prompt_src,guidance_scale=guidance_scale,num_inner_steps=0)
+            image_gt=image_gt, prompt=prompt_src,guidance_scale=guidance_scale,num_inner_steps=10)
         x_t = x_stars[-1]
 
         controller = AttentionStore()
