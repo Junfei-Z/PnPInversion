@@ -4,13 +4,14 @@ from models.p2p.inversion import NegativePromptInversion, NullInversion, DirectI
 from models.p2p.attention_control import EmptyControl, AttentionStore, make_controller
 from models.p2p.p2p_guidance_forward import p2p_guidance_forward, direct_inversion_p2p_guidance_forward, direct_inversion_p2p_guidance_forward_add_target,p2p_guidance_forward_single_branch
 from models.p2p.proximal_guidance_forward import proximal_guidance_forward
+from models.p2p.adaptive_control import get_adaptive_parameters
 from diffusers import StableDiffusionPipeline
 from utils.utils import load_512, latent2image, txt_draw
 from PIL import Image
 import numpy as np
 
 class P2PEditor:
-    def __init__(self, method_list, device, num_ddim_steps=50) -> None:
+    def __init__(self, method_list, device, num_ddim_steps=25) -> None:
         self.device=device
         self.method_list=method_list
         self.num_ddim_steps=num_ddim_steps
@@ -145,6 +146,7 @@ class P2PEditor:
         blend_word=None,
         eq_params=None,
         is_replace_controller=False,
+        edit_type_id=None,
     ):
         image_gt = load_512(image_path)
         prompts = [prompt_src, prompt_tar]
@@ -152,33 +154,42 @@ class P2PEditor:
         null_inversion = NullInversion(model=self.ldm_stable,
                                     num_ddim_steps=self.num_ddim_steps)
         _, _, x_stars, uncond_embeddings = null_inversion.invert(
-            image_gt=image_gt, prompt=prompt_src,guidance_scale=guidance_scale,num_inner_steps=0)
+            image_gt=image_gt, prompt=prompt_src,guidance_scale=guidance_scale,num_inner_steps=10)
         x_t = x_stars[-1]
 
         controller = AttentionStore()
-        reconstruct_latent, x_t = p2p_guidance_forward(model=self.ldm_stable, 
-                                       prompt=[prompt_src], 
-                                       controller=controller, 
-                                       latent=x_t, 
-                                       num_inference_steps=self.num_ddim_steps, 
-                                       guidance_scale=guidance_scale, 
-                                       generator=None, 
+        reconstruct_latent, x_t = p2p_guidance_forward(model=self.ldm_stable,
+                                       prompt=[prompt_src],
+                                       controller=controller,
+                                       latent=x_t,
+                                       num_inference_steps=self.num_ddim_steps,
+                                       guidance_scale=guidance_scale,
+                                       generator=None,
                                        uncond_embeddings=uncond_embeddings)
-        
+
 
         reconstruct_image = latent2image(model=self.ldm_stable.vae, latents=reconstruct_latent)[0]
         image_instruct = txt_draw(f"source prompt: {prompt_src}\ntarget prompt: {prompt_tar}")
-        
+
         ########## edit ##########
+        # Adaptive parameter adjustment based on semantic analysis
+        adaptive_cross, adaptive_self = get_adaptive_parameters(
+            prompt_src,
+            prompt_tar,
+            self.ldm_stable.tokenizer,
+            edit_type_id,
+            verbose=True
+        )
+
         cross_replace_steps = {
-            'default_': cross_replace_steps,
+            'default_': adaptive_cross,
         }
 
         controller = make_controller(pipeline=self.ldm_stable,
                                     prompts=prompts,
                                     is_replace_controller=is_replace_controller,
                                     cross_replace_steps=cross_replace_steps,
-                                    self_replace_steps=self_replace_steps,
+                                    self_replace_steps=adaptive_self,
                                     blend_words=blend_word,
                                     equilizer_params=eq_params,
                                     num_ddim_steps=self.num_ddim_steps,

@@ -181,6 +181,7 @@ if __name__ == "__main__":
                     image_path=image_path,
                     prompt_src=original_prompt,
                     prompt_tar=editing_prompt,
+                    edit_type_id=item["editing_type_id"],  # Pass editing type for adaptive control
                     guidance_scale=7.5,
                     cross_replace_steps=0.4,
                     self_replace_steps=0.6,
