@@ -73,7 +73,8 @@ class P2PEditorFrequency:
         image_path,
         prompt_src,
         prompt_tar,
-        num_inner_steps=10,
+        #我这里改成0，只比较frequency这个模块的差异
+        num_inner_steps=0,
         guidance_scale=7.5,
         cross_replace_steps=0.4,
         self_replace_steps=0.6,
