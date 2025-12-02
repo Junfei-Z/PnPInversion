@@ -4,20 +4,17 @@ from models.p2p.inversion import NegativePromptInversion, NullInversion, DirectI
 from models.p2p.attention_control import EmptyControl, AttentionStore, make_controller
 from models.p2p.p2p_guidance_forward import p2p_guidance_forward, direct_inversion_p2p_guidance_forward, direct_inversion_p2p_guidance_forward_add_target,p2p_guidance_forward_single_branch
 from models.p2p.proximal_guidance_forward import proximal_guidance_forward
-from models.p2p.adaptive_control import get_adaptive_parameters
 from diffusers import StableDiffusionPipeline
 from utils.utils import load_512, latent2image, txt_draw
 from PIL import Image
 import numpy as np
-from models.enhanced_text_encoder import load_enhanced_text_encoder, verify_encoder_compatibility, EnhancedTextEncoderConfig
+from models.adaptive_inversion import get_adaptive_num_inner_steps
 
 class P2PEditor:
-    #之前的想法是调整这里的num_ddim_steps（最开始是50）
-    def __init__(self, method_list, device, num_ddim_steps=50, enhanced_encoder=None) -> None:
+    def __init__(self, method_list, device, num_ddim_steps=50) -> None:
         self.device=device
         self.method_list=method_list
         self.num_ddim_steps=num_ddim_steps
-        self.enhanced_encoder=enhanced_encoder
 
         # init model
         self.scheduler = DDIMSchedulerDev(beta_start=0.00085,
@@ -28,41 +25,6 @@ class P2PEditor:
         self.ldm_stable = StableDiffusionPipeline.from_pretrained(
             "CompVis/stable-diffusion-v1-4", scheduler=self.scheduler).to(device)
         self.ldm_stable.scheduler.set_timesteps(self.num_ddim_steps)
-
-        # ⭐ Replace text encoder if enhanced_encoder is specified
-        if enhanced_encoder is not None:
-            print(f"\n{'='*80}")
-            print(f"🚀 Replacing text encoder with enhanced version: {enhanced_encoder}")
-            print(f"{'='*80}")
-
-            # Store original encoder for comparison
-            self.original_text_encoder = self.ldm_stable.text_encoder
-
-            # Load enhanced encoder
-            enhanced_text_encoder, enhanced_tokenizer = load_enhanced_text_encoder(
-                encoder_name=enhanced_encoder,
-                device=device
-            )
-
-            # Verify compatibility before replacing
-            print("\nVerifying compatibility with SD 1.4...")
-            is_compatible = verify_encoder_compatibility(enhanced_text_encoder)
-
-            if is_compatible:
-                # Replace text encoder
-                self.ldm_stable.text_encoder = enhanced_text_encoder
-
-                # Update tokenizer to match the new encoder
-                # Note: We keep max_length=77 for compatibility
-                self.ldm_stable.tokenizer = enhanced_tokenizer
-                self.ldm_stable.tokenizer.model_max_length = 77
-
-                print(f"\n✓✓✓ Successfully replaced text encoder with {enhanced_encoder} ✓✓✓")
-                print(f"{'='*80}\n")
-            else:
-                print(f"\n✗✗✗ Enhanced encoder is not compatible! Using original encoder. ✗✗✗")
-                print(f"{'='*80}\n")
-                self.enhanced_encoder = None  # Disable enhanced encoder
 
         
     def __call__(self,
@@ -191,11 +153,21 @@ class P2PEditor:
     ):
         image_gt = load_512(image_path)
         prompts = [prompt_src, prompt_tar]
-#这里是调整num_inner_steps让其更接近原图最开始这里是0
+
+        # ⭐ Adaptive num_inner_steps based on semantic distance
+        adaptive_num_inner_steps = get_adaptive_num_inner_steps(
+            prompt_src=prompt_src,
+            prompt_tar=prompt_tar,
+            tokenizer=self.ldm_stable.tokenizer,
+            strategy='moderate',  # Can be 'conservative', 'moderate', or 'aggressive'
+            verbose=True,
+            device=self.device
+        )
+
         null_inversion = NullInversion(model=self.ldm_stable,
                                     num_ddim_steps=self.num_ddim_steps)
         _, _, x_stars, uncond_embeddings = null_inversion.invert(
-            image_gt=image_gt, prompt=prompt_src,guidance_scale=guidance_scale,num_inner_steps=0)
+            image_gt=image_gt, prompt=prompt_src,guidance_scale=guidance_scale,num_inner_steps=adaptive_num_inner_steps)
         x_t = x_stars[-1]
 
         controller = AttentionStore()
@@ -213,24 +185,11 @@ class P2PEditor:
         image_instruct = txt_draw(f"source prompt: {prompt_src}\ntarget prompt: {prompt_tar}")
 
         ########## edit ##########
-        # Adaptive parameter adjustment based on semantic analysis
-        adaptive_cross, adaptive_self = get_adaptive_parameters(
-            prompt_src,
-            prompt_tar,
-            self.ldm_stable.tokenizer,
-            edit_type_id,
-            verbose=True
-        )
-
-        cross_replace_steps = {
-            'default_': adaptive_cross,
-        }
-
         controller = make_controller(pipeline=self.ldm_stable,
                                     prompts=prompts,
                                     is_replace_controller=is_replace_controller,
-                                    cross_replace_steps=cross_replace_steps,
-                                    self_replace_steps=adaptive_self,
+                                    cross_replace_steps={'default_': cross_replace_steps},
+                                    self_replace_steps=self_replace_steps,
                                     blend_words=blend_word,
                                     equilizer_params=eq_params,
                                     num_ddim_steps=self.num_ddim_steps,
